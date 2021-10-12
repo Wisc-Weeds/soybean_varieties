@@ -1,0 +1,8 @@
+---
+title: "analyses"
+author: "Maxwel Coura Oliveira"
+date: "10/12/2021"
+output: html_document
+---
+
+>  The biggest question to answer would be whether soybean (across varieties) are more sensitive to metribuzin or sulfentrazone; farmers are typically concerned about metribuzin but in recent conversations with several weed scientists it seems like that current soybean varieties handle metribuzin well; the problem is usually sulfentrazone/flumi (splashing during emergence); that's what Nikola's paper indicated
