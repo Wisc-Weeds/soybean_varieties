@@ -6,3 +6,201 @@ output: html_document
 ---
 
 >  The biggest question to answer would be whether soybean (across varieties) are more sensitive to metribuzin or sulfentrazone; farmers are typically concerned about metribuzin but in recent conversations with several weed scientists it seems like that current soybean varieties handle metribuzin well; the problem is usually sulfentrazone/flumi (splashing during emergence); that's what Nikola's paper indicated
+
+```{r}
+library(tidyverse)
+library(ggthemes)
+library(ggtext)
+library(rstanarm)
+library(brms)
+library(scales)
+library(bayestestR)
+library(BayesFactor)
+library(emmeans)
+library(glmmTMB)
+library(lmerTest)
+```
+
+
+```{r}
+read_csv("data/soytolerance.csv") |> 
+  janitor::clean_names() |> 
+  mutate(rating = parse_double(rating)) |> 
+  mutate(rating = if_else(rating > 10, 
+                          NA_real_, rating)) |> 
+  mutate(rating = rating / 10) |> 
+  mutate(rating = case_when(
+    rating == 0.0 ~ 0.1,
+    rating == 1.0 ~ 0.99,
+    TRUE ~ rating
+  )) |> 
+  mutate_if(is_character, as_factor) |> 
+  mutate(herbicide = fct_recode(herbicide,
+                                "Untreated" = "ctrl",
+                                "Metribuzin" = "metr",
+                                "Sulfentrazone" = "sulf")) |> 
+  mutate(rate_id = case_when(
+    rating >= 0.7 ~ "Health",
+    rating < 4 ~ "Injury",
+    TRUE ~ "Median"
+  )) -> data
+```
+
+```{r}
+data |> 
+  count(rate_id, herbicide, herb_trait) |> 
+  group_by(herb_trait, herbicide) |> 
+  mutate(sum = sum(n)) |> 
+  mutate(perc = round(n / sum, 2)) |> 
+  ggplot(aes(x = herb_trait, y = perc, fill = rate_id)) +
+  geom_bar(stat = "identity", position = "stack") +
+  facet_grid(~herbicide) +
+  coord_flip()
+```
+
+
+
+
+```{r}
+data1 <- data |> 
+  nest(-herb_trait)
+```
+
+
+```{r}
+mod_func <- function(dt){
+glmmTMB(rating ~ herbicide + (1|run/variety), 
+        family = beta_family(),
+        data = dt
+        )
+}
+```
+
+```{r}
+data1 |> 
+  mutate(model = map(data, mod_func),
+         anova = map(model, glmmTMB:::Anova.glmmTMB)) -> data2
+```
+
+
+
+```{r}
+data2$model[[1]]
+```
+
+
+```{r}
+emmip(data2$model[[1]], ~ herbicide, type = "response") +
+  coord_flip()
+```
+
+```{r}
+emmeans(model, ~ herbicide, type = "response") -> emm1
+```
+
+```{r}
+plot(emm1, ~ herbicide, 
+     comparisons=TRUE, 
+     type="response", 
+     alpha=0.05, 
+     adjust="none") +
+  scale_x_continuous(limits = c(0, 1), labels = scales::number_format(scale = 10))
+```
+
+```{r}
+library(multcomp)
+cld <- cld(emm1, alpha=0.05, Letters=letters, adjust="none", reversed = TRUE)
+cld
+```
+
+
+
+```{r}
+emm1 |> 
+  as_tibble() |>
+  rename(rating = response) |> 
+  ggplot(aes(x = herbicide, y = rating)) +
+  geom_jitter(data, mapping = aes(x = herbicide, y = rating, color = brand),
+              alpha = 0.05) +
+  geom_point(size = 2) +
+  geom_linerange(aes(ymin = lower.CL, ymax = upper.CL), size = 2) +
+  coord_flip() +
+  scale_y_continuous(limits = c(0, 1), labels = scales::number_format(scale = 10))
+```
+
+
+
+
+```{r}
+brm(rating ~ herbicide +
+                (1|run/variety), 
+    data = data,
+    control = list(adapt_delta = 0.95),
+    family = Beta(link = "logit", 
+                  link_phi = "log"),
+    warmup = 1000, iter = 2000, chains = 4,
+    prior = set_prior("student_t(0.5, 3, 11)", class = "b")) -> model
+```
+
+
+
+
+
+```{r}
+data |> 
+  pivot_wider(id_cols = c(variety, seed_treatment),
+              names_from = herbicide, values_from = rating)
+```
+
+```{r}
+data |> 
+  group_by(seed_treatment, herbicide) |> 
+  summarise(rating = mean(rating, na.rm = TRUE)) |> 
+  ungroup() |> 
+  ggplot(aes(x = seed_treatment, y = rating, color = herbicide, group = herbicide)) +
+  scale_y_continuous(limits = c(0, 10), breaks = seq(0,10, 2)) +
+
+  geom_point(size = 2) +
+  coord_flip() +
+  geom_rect(aes(xmin = 0, xmax = 24, ymin= 0, ymax = 4), color = NA, fill = 2, alpha = 0.01) +
+  geom_rect(aes(xmin = 0, xmax = 24, ymin= 4, ymax = 7), color = NA, fill = "yellow", alpha = 0.01) +
+  geom_rect(aes(xmin = 0, xmax = 24, ymin= 7, ymax = 10), color = NA, fill = 3, alpha = 0.01) +
+  geom_point(size = 2) +
+  geom_jitter(data, 
+              mapping = aes(x = seed_treatment, y = rating, color = herbicide, group = herbicide),
+              alpha = 0.01, width = 1) +
+  theme_bw() +
+  labs(x = "seed_treatment", y = "Rating")
+```
+
+```{r}
+data |> 
+  group_by(herb_trait, herbicide) |> 
+  summarise(rating = mean(rating, na.rm = TRUE)) |> 
+  ungroup() |> 
+  ggplot(aes(x = herb_trait, y = rating, color = herbicide, group = herbicide)) +
+  scale_y_continuous(limits = c(0, 10), breaks = seq(0,10, 2)) +
+  geom_point(size = 2) +
+  scale_color_calc() +
+  geom_rect(aes(xmin = 0, xmax = 7, ymin= 0, ymax = 4), color = NA, fill = 2, alpha = 0.01) +
+  geom_rect(aes(xmin = 0, xmax = 7, ymin= 4, ymax = 7), color = NA, fill = "yellow", alpha = 0.01) +
+  geom_rect(aes(xmin = 0, xmax = 7, ymin= 7, ymax = 10), color = NA, fill = 3, alpha = 0.01) +
+  geom_point(size = 2) +
+  geom_jitter(data, 
+              mapping = aes(x = herb_trait, y = rating, color = herbicide, group = herbicide),
+              alpha = 0.01, width = 1) +
+  theme_bw() +
+  coord_flip() +
+  labs(x = "Herbicide trait", y = "Rating")
+
+ggsave("herb_trait.png")
+```
+
+
+```{r}
+data |> 
+  filter(herbicide != "ctrl") |> 
+  ggplot(aes(x = herb_trait, y = rating, color = herbicide)) +
+  geom_jitter()
+```
+
